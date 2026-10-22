@@ -101,10 +101,13 @@ set(F2PY_LIBRARIES _f2py_runtime_library)
 set(F2PY_INCLUDE_DIRS "${F2PY_INCLUDE_DIR}" "${NumPy_INCLUDE_DIRS}")
 
 if(F2PY_EXECUTABLE)
+  # F2PY_EXECUTABLE may itself be a list (``python -m numpy.f2py`` fallback),
+  # so it must be expanded without quotes.
   # extract the version string
-  execute_process(COMMAND "${F2PY_EXECUTABLE}" -v
+  execute_process(COMMAND ${F2PY_EXECUTABLE} -v
                   OUTPUT_VARIABLE F2PY_VERSION_STRING
-                  OUTPUT_STRIP_TRAILING_WHITESPACE)
+                  OUTPUT_STRIP_TRAILING_WHITESPACE
+                  ERROR_QUIET)
   if("${F2PY_VERSION_STRING}" MATCHES "^([0-9]+)(\\.([0-9]+))?(\\.([0-9]+))?$")
     set(F2PY_VERSION_MAJOR ${CMAKE_MATCH_1})
     set(F2PY_VERSION_MINOR "${CMAKE_MATCH_3}")

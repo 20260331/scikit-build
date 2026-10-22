@@ -11,6 +11,7 @@
 #                     [EMBED_MAIN]
 #                     [C | CXX]
 #                     [PY2 | PY3]
+#                     [PREBUILT <REQUIRE | PREFER | REGENERATE>]
 #                     [OUTPUT_VAR <OutputVar>])
 #
 # ``<Name>`` is the name of the new target, and ``<CythonInput>``
@@ -46,6 +47,32 @@
 #   version of Python found is 2.  Otherwise, Python-3 syntax and semantics are
 #   used.
 #
+# ``PREBUILT <REQUIRE | PREFER | REGENERATE>``
+#   Control the takeover of a pre-generated source shipped in the source tree,
+#   next to the ``.pyx`` input (e.g. ``_hello.cxx`` plus a sidecar
+#   ``_hello.cxx.provenance`` credential).  The credential records the Cython
+#   version, the generation options and the SHA256 of every input and output,
+#   so a stale or edited copy can never be mistaken for a valid one:
+#
+#   ``REQUIRE``
+#     Do not run Cython.  The pre-generated source must be present with a valid
+#     credential, otherwise configuration fails.  Useful for sdists that must
+#     build without Cython installed.
+#
+#   ``PREFER``
+#     Use the pre-generated source when its credential is valid; fall back to
+#     running Cython otherwise.  A source-tree copy without a valid credential
+#     is never compiled directly.
+#
+#   ``REGENERATE``
+#     Ignore any source-tree copy and always run Cython (the default).  The
+#     regenerated source is written in the build tree together with a fresh
+#     credential that can be shipped next to the input when preparing an sdist.
+#
+#   Whatever the mode, the compiled file always lives in the build tree; a
+#   pre-generated source is only ever copied there after its credential has
+#   been verified.  Defaults to the ``CYTHON_PREBUILT`` cache variable.
+#
 # ``OUTPUT_VAR <OutputVar>``
 #   Set the variable ``<OutputVar>`` in the parent scope to the path to the
 #   generated source file.  By default, ``<Name>`` is used as the output
@@ -63,6 +90,10 @@
 #
 # ``CYTHON_FLAGS``
 #   Additional flags to pass to the Cython compiler.
+#
+# ``CYTHON_PREBUILT``
+#   Default for the ``PREBUILT`` option of ``add_cython_target``: one of
+#   ``REQUIRE``, ``PREFER`` or ``REGENERATE`` (the default).
 #
 # Example usage
 # ^^^^^^^^^^^^^
@@ -100,7 +131,13 @@ set(CYTHON_ANNOTATE OFF
 
 set(CYTHON_FLAGS "" CACHE STRING
     "Extra flags to the cython compiler.")
-mark_as_advanced(CYTHON_ANNOTATE CYTHON_FLAGS)
+
+set(CYTHON_PREBUILT "REGENERATE" CACHE STRING
+    "Take over a pre-generated Cython source shipped next to the .pyx input when a valid .provenance credential accompanies it: REQUIRE (fail without one), PREFER (use it, regenerate otherwise) or REGENERATE (always run Cython; the default).")
+set_property(CACHE CYTHON_PREBUILT PROPERTY STRINGS REQUIRE PREFER REGENERATE)
+mark_as_advanced(CYTHON_ANNOTATE CYTHON_FLAGS CYTHON_PREBUILT)
+
+include(UsePrebuiltProvenance)
 
 set(CYTHON_CXX_EXTENSION "cxx")
 set(CYTHON_C_EXTENSION "c")
@@ -109,7 +146,7 @@ get_property(languages GLOBAL PROPERTY ENABLED_LANGUAGES)
 
 function(add_cython_target _name)
   set(options EMBED_MAIN C CXX PY2 PY3)
-  set(options1 OUTPUT_VAR)
+  set(options1 OUTPUT_VAR PREBUILT)
   cmake_parse_arguments(_args "${options}" "${options1}" "" ${ARGN})
 
   list(GET _args_UNPARSED_ARGUMENTS 0 _arg0)
@@ -347,18 +384,120 @@ function(add_cython_target _name)
 
   string(REGEX REPLACE " " ";" CYTHON_FLAGS_LIST "${CYTHON_FLAGS}")
 
-  # Add the command to run the compiler.
-  add_custom_command(OUTPUT ${generated_file}
-                     COMMAND ${CYTHON_EXECUTABLE}
-                     ARGS ${cxx_arg} ${include_directory_arg} ${py_version_arg}
-                          ${embed_arg} ${annotate_arg} ${cython_debug_arg}
-                          ${line_directives_arg} ${CYTHON_FLAGS_LIST} ${pyx_location}
-                          --output-file ${generated_file}
-                     DEPENDS ${_source_file}
-                             ${pxd_dependencies}
-                     IMPLICIT_DEPENDS ${_output_syntax}
-                                      ${c_header_dependencies}
-                     COMMENT ${comment})
+  # Build the provenance information.  The canonical options string must be
+  # identical when a credential is written (build time, below) and when a
+  # shipped credential is verified (configure time), so keep it free of
+  # semicolons and use a fixed component order.
+  set(_provenance_inputs "${pyx_location}")
+  foreach(_provenance_dep IN LISTS pxd_dependencies c_header_dependencies)
+    list(APPEND _provenance_inputs "${_provenance_dep}")
+  endforeach()
+  list(REMOVE_DUPLICATES _provenance_inputs)
+
+  if(cython_debug_arg)
+    set(_provenance_debug 1)
+  else()
+    set(_provenance_debug 0)
+  endif()
+  if(CYTHON_ANNOTATE)
+    set(_provenance_annotate 1)
+  else()
+    set(_provenance_annotate 0)
+  endif()
+  if(_embed_main)
+    set(_provenance_embed 1)
+  else()
+    set(_provenance_embed 0)
+  endif()
+  set(_provenance_options
+      "cython/1|lang=${_output_syntax}|py=${_input_syntax}|embed=${_provenance_embed}|annotate=${_provenance_annotate}|debug=${_provenance_debug}|flags=${CYTHON_FLAGS}")
+
+  # Resolve a pre-generated source in the source tree, next to the .pyx.
+  _skbuild_prebuilt_resolve_mode(_prebuilt_mode
+                                 KEYWORD "${_args_PREBUILT}"
+                                 CACHE CYTHON_PREBUILT)
+  set(_prebuilt_takeover FALSE)
+  if(NOT _prebuilt_mode STREQUAL "REGENERATE")
+    set(_prebuilt_candidate "${pyx_path}/${_name}.${extension}")
+    set(_prebuilt_credential "${_prebuilt_candidate}.provenance")
+    _skbuild_provenance_check(_prebuilt_valid _prebuilt_reason
+      GENERATOR cython
+      GENERATOR_VERSION "${CYTHON_VERSION}"
+      OPTIONS "${_provenance_options}"
+      PRIMARY_DIR "${pyx_path}"
+      CREDENTIAL "${_prebuilt_credential}"
+      CANDIDATES "${_prebuilt_candidate}"
+      INPUTS ${_provenance_inputs})
+
+    if(_prebuilt_valid)
+      set(_prebuilt_takeover TRUE)
+      message(STATUS
+        "Cython: taking over verified pre-generated source "
+        "${_prebuilt_candidate} (${_prebuilt_mode})")
+    elseif(_prebuilt_mode STREQUAL "REQUIRE")
+      message(FATAL_ERROR
+        "Cython: PREBUILT REQUIRE for '${_name}', but the pre-generated "
+        "source could not be verified:\n  ${_prebuilt_reason}\n"
+        "Ship a freshly generated '${_name}.${extension}' together with its "
+        "'.provenance' credential, or set PREBUILT/CYTHON_PREBUILT to PREFER "
+        "or REGENERATE.")
+    else()
+      message(WARNING
+        "Cython: pre-generated source '${_prebuilt_candidate}' rejected "
+        "(${_prebuilt_reason}); regenerating with Cython")
+    endif()
+  endif()
+
+  if(_prebuilt_takeover)
+    # Only a verified copy is ever materialized in the build tree; the
+    # source-tree file itself is never a build input.
+    add_custom_command(OUTPUT ${generated_file}
+                       COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                               "${_prebuilt_candidate}" "${generated_file}"
+                       DEPENDS "${_prebuilt_candidate}"
+                               "${_prebuilt_credential}"
+                       COMMENT "Copying verified pre-generated ${_output_syntax} source ${generated_file_relative}"
+                       VERBATIM)
+  else()
+    _skbuild_provenance_writer_script(_provenance_writer)
+    set(_provenance_credential "${generated_file}.provenance")
+    string(REPLACE ";" "\\;" _provenance_inputs_escaped "${_provenance_inputs}")
+
+    # VERBATIM is required so the '|' in the canonical options string (and any
+    # shell metacharacters in CYTHON_FLAGS) reach the commands uninterpreted.
+    # Build the arguments as a list so empty, unused options are dropped.
+    set(_cython_command_args
+        ${cxx_arg}
+        ${include_directory_arg}
+        ${py_version_arg}
+        ${embed_arg}
+        ${annotate_arg}
+        ${cython_debug_arg}
+        ${line_directives_arg}
+        ${CYTHON_FLAGS_LIST}
+        "${pyx_location}"
+        "--output-file" "${generated_file}")
+    set(_provenance_writer_args
+        "-DGENERATOR=cython"
+        "-DGENERATOR_VERSION=${CYTHON_VERSION}"
+        "-DOPTIONS=${_provenance_options}"
+        "-DPRIMARY_DIR=${pyx_path}"
+        "-DCREDENTIAL_FILE=${_provenance_credential}"
+        "-DOUTPUT_FILES=${generated_file}"
+        "-DINPUT_FILES=${_provenance_inputs_escaped}"
+        "-P" "${_provenance_writer}")
+
+    # Add the command to run the compiler and refresh the credential.
+    add_custom_command(OUTPUT ${generated_file} ${_provenance_credential}
+                       COMMAND ${CYTHON_EXECUTABLE} ${_cython_command_args}
+                       COMMAND ${CMAKE_COMMAND} ${_provenance_writer_args}
+                       DEPENDS ${_source_file}
+                               ${pxd_dependencies}
+                       IMPLICIT_DEPENDS ${_output_syntax}
+                                        ${c_header_dependencies}
+                       COMMENT ${comment}
+                       VERBATIM)
+  endif()
 
   # NOTE(opadron): I thought about making a proper target, but after trying it
   # out, I decided that it would be far too convenient to use the same name as

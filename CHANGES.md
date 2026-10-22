@@ -4,6 +4,16 @@ This is the list of changes to scikit-build between each release. For full detai
 
 <!-- START-BRIEF-CHANGELOG -->
 
+## Unreleased
+
+### Features
+
+- `add_cython_target` and `add_f2py_target` gain a `PREBUILT` option (with the `CYTHON_PREBUILT`/`F2PY_PREBUILT` cache variable defaults) to take over pre-generated sources shipped in the source tree using a sidecar `.provenance` credential. `REQUIRE` fails unless a valid credential is present (allowing builds without Cython/F2PY), `PREFER` uses verified pre-generated sources and regenerates otherwise, and `REGENERATE` (the default) always regenerates; stale or edited source-tree copies can no longer be compiled directly.
+
+### Bug fixes
+
+- Populate `F2PY_VERSION_STRING` when F2PY is invoked through the `${PYTHON_EXECUTABLE} -m numpy.f2py` fallback (the command is a list and must not be quoted).
+
 ## Scikit-build 1.0.0
 
 The classic scikit-build backend has been replaced by [scikit-build-core](https://github.com/scikit-build/scikit-build-core)'s setuptools plugin. `skbuild.setup()` is now a thin wrapper around `scikit_build_core.setuptools.wrapper.setup()`, and scikit-build depends on `scikit-build-core[setuptools]`. Most packages — those that only use `from skbuild import setup` with the documented `cmake_*` keyword arguments — will continue to build unchanged. New projects are still encouraged to use scikit-build-core directly.
