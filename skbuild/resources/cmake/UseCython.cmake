@@ -107,6 +107,11 @@ set(CYTHON_C_EXTENSION "c")
 
 get_property(languages GLOBAL PROPERTY ENABLED_LANGUAGES)
 
+# Remember the directory containing the scikit-build CMake helper scripts so
+# the custom command below can locate PublishGeneratedOutputs.cmake at build
+# time regardless of the directory scope the function is called from.
+set_property(GLOBAL PROPERTY _skbuild_cmake_module_dir "${CMAKE_CURRENT_LIST_DIR}")
+
 function(add_cython_target _name)
   set(options EMBED_MAIN C CXX PY2 PY3)
   set(options1 OUTPUT_VAR)
@@ -347,13 +352,47 @@ function(add_cython_target _name)
 
   string(REGEX REPLACE " " ";" CYTHON_FLAGS_LIST "${CYTHON_FLAGS}")
 
+  # The annotated .html is part of the output set when annotation is enabled,
+  # either through CYTHON_ANNOTATE or CYTHON_FLAGS.
+  set(_generate_annotation ${CYTHON_ANNOTATE})
+  if("--annotate" IN_LIST CYTHON_FLAGS_LIST OR "-a" IN_LIST CYTHON_FLAGS_LIST)
+    set(_generate_annotation TRUE)
+  endif()
+
+  # Cython emits the generated source (and, when requested, the annotated
+  # .html) at once. Generate into a private staging directory and only publish
+  # the files to their final location once the complete set has been
+  # validated, so a failed run can never leave old and new outputs mixed
+  # together.
+  set(staging_dir "${CMAKE_CURRENT_BINARY_DIR}/.${_name}.cython-staging")
+  set(staged_file "${staging_dir}/${_name}.${extension}")
+
+  set(_publish_outputs ${generated_file})
+  if(_generate_annotation)
+    list(APPEND _publish_outputs "${CMAKE_CURRENT_BINARY_DIR}/${_name}.html")
+  endif()
+
+  get_property(_publish_script_dir GLOBAL PROPERTY _skbuild_cmake_module_dir)
+  set(publish_script "${_publish_script_dir}/PublishGeneratedOutputs.cmake")
+
+  # Escape list separators so the output set survives the build tool's
+  # command line when passed to the publish script with -D.
+  string(REPLACE ";" "\\;" _publish_outputs_arg "${_publish_outputs}")
+
   # Add the command to run the compiler.
   add_custom_command(OUTPUT ${generated_file}
+                     COMMAND ${CMAKE_COMMAND} -E remove_directory "${staging_dir}"
+                     COMMAND ${CMAKE_COMMAND} -E make_directory "${staging_dir}"
                      COMMAND ${CYTHON_EXECUTABLE}
-                     ARGS ${cxx_arg} ${include_directory_arg} ${py_version_arg}
+                          ${cxx_arg} ${include_directory_arg} ${py_version_arg}
                           ${embed_arg} ${annotate_arg} ${cython_debug_arg}
                           ${line_directives_arg} ${CYTHON_FLAGS_LIST} ${pyx_location}
-                          --output-file ${generated_file}
+                          --output-file "${staged_file}"
+                     COMMAND ${CMAKE_COMMAND}
+                             -DGENERATOR_NAME=Cython
+                             "-DSTAGING_DIR=${staging_dir}"
+                             "-DOUTPUT_FILES=${_publish_outputs_arg}"
+                             -P "${publish_script}"
                      DEPENDS ${_source_file}
                              ${pxd_dependencies}
                      IMPLICIT_DEPENDS ${_output_syntax}

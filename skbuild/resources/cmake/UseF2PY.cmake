@@ -69,6 +69,11 @@
 
 get_property(languages GLOBAL PROPERTY ENABLED_LANGUAGES)
 
+# Remember the directory containing the scikit-build CMake helper scripts so
+# the custom command below can locate PublishGeneratedOutputs.cmake at build
+# time regardless of the directory scope the function is called from.
+set_property(GLOBAL PROPERTY _skbuild_cmake_module_dir "${CMAKE_CURRENT_LIST_DIR}")
+
 function(add_f2py_target _name)
   set(options )
   set(oneValueArgs OUTPUT_VAR)
@@ -108,7 +113,23 @@ function(add_f2py_target _name)
     "${CMAKE_CURRENT_BINARY_DIR}/${_name}-f2pywrappers2.f90"
     )
 
-  get_filename_component(generated_file_dir ${generated_file} DIRECTORY)
+  # F2PY emits its outputs (module.c and, only when needed, the wrapper
+  # sources) at once. Generate into a private staging directory and only
+  # publish the files to their final location once the complete required
+  # output set has been validated, so a failed run can never leave old and
+  # new outputs mixed together. The wrapper sources are optional: the publish
+  # step materializes empty placeholders when F2PY does not generate them.
+  set(staging_dir "${CMAKE_CURRENT_BINARY_DIR}/.${_name}.f2py-staging")
+  set(_publish_outputs ${generated_file})
+  set(_optional_publish_outputs ${generated_wrappers})
+
+  get_property(_publish_script_dir GLOBAL PROPERTY _skbuild_cmake_module_dir)
+  set(publish_script "${_publish_script_dir}/PublishGeneratedOutputs.cmake")
+
+  # Escape list separators so the output sets survive the build tool's
+  # command line when passed to the publish script with -D.
+  string(REPLACE ";" "\\;" _publish_outputs_arg "${_publish_outputs}")
+  string(REPLACE ";" "\\;" _optional_publish_outputs_arg "${_optional_publish_outputs}")
 
   set_source_files_properties(${generated_file} PROPERTIES GENERATED TRUE)
   set_source_files_properties(${generated_wrappers} PROPERTIES GENERATED TRUE)
@@ -128,15 +149,23 @@ function(add_f2py_target _name)
   get_source_file_property(pyf_location ${_source_file} LOCATION)
   get_filename_component(pyf_path ${pyf_location} PATH)
 
-  # Create the directory so that the command can cd to it
-  file(MAKE_DIRECTORY ${generated_file_dir})
-
-  # Add the command to run the compiler.
+  # The F2PY outputs are first generated into the staging directory (F2PY
+  # always writes next to its working directory) and only moved in place by
+  # the publish script once the complete required output set has been
+  # verified.
   add_custom_command(OUTPUT ${generated_file} ${generated_wrappers}
-                     COMMAND ${F2PY_EXECUTABLE} ${pyf_location}
+                     COMMAND ${CMAKE_COMMAND} -E remove_directory "${staging_dir}"
+                     COMMAND ${CMAKE_COMMAND} -E make_directory "${staging_dir}"
+                     COMMAND ${CMAKE_COMMAND} -E chdir "${staging_dir}"
+                             ${F2PY_EXECUTABLE} ${pyf_location}
+                     COMMAND ${CMAKE_COMMAND}
+                             -DGENERATOR_NAME=F2PY
+                             "-DSTAGING_DIR=${staging_dir}"
+                             "-DOUTPUT_FILES=${_publish_outputs_arg}"
+                             "-DOPTIONAL_OUTPUT_FILES=${_optional_publish_outputs_arg}"
+                             -P "${publish_script}"
                      DEPENDS ${_source_file}
                              ${_args_DEPENDS}
-                     WORKING_DIRECTORY ${generated_file_dir}
                      COMMENT "${comment}")
 
 endfunction()
