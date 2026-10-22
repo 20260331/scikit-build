@@ -10,7 +10,39 @@ from __future__ import annotations
 
 from setuptools.errors import SetupError as SKBuildError
 
-__all__ = ["SKBuildError"]
+__all__ = [
+    "BundleError",
+    "BundleExistsError",
+    "BundleVerificationError",
+    "InvalidModuleNameError",
+    "ModuleNameCollisionError",
+    "SKBuildError",
+    "UnknownModuleError",
+]
+
+
+class BundleError(SKBuildError):
+    """Base class for errors raised by the CMake module bundle export/verify API."""
+
+
+class UnknownModuleError(BundleError):
+    """A requested module is not provided by the resource set."""
+
+
+class InvalidModuleNameError(BundleError):
+    """A module or manifest path is not a safe, single-component name."""
+
+
+class ModuleNameCollisionError(BundleError):
+    """Two module names differ only in case, or a request matches only by case."""
+
+
+class BundleExistsError(BundleError):
+    """The destination already holds content that must not be overwritten."""
+
+
+class BundleVerificationError(BundleError):
+    """A bundle failed integrity verification (raised only in strict mode)."""
 
 
 def __dir__() -> list[str]:

@@ -10,12 +10,13 @@ from __future__ import annotations
 from scikit_build_core.setuptools.wrapper import setup
 
 from ._version import version as __version__
+from .resources.cmake import export_bundle, verify_bundle
 
 __author__ = "The scikit-build team"
 __email__ = "scikit-build@googlegroups.com"
 
 
-__all__ = ["__version__", "setup"]
+__all__ = ["__version__", "export_bundle", "setup", "verify_bundle"]
 
 
 def __dir__() -> list[str]:
