@@ -34,6 +34,9 @@ dependencies = [
 [project.entry-points."cmake.module"]
 skbuild = "skbuild.resources.cmake"
 
+[project.scripts]
+skbuild-migration-check = "skbuild.migration_checker:main"
+
 [project.urls]
 "Bug Tracker" = "https://github.com/scikit-build/scikit-build/issues"
 Changelog = "https://scikit-build.readthedocs.io/en/latest/history.html"
